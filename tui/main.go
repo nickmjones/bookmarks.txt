@@ -239,25 +239,168 @@ type model struct {
 
 	lastMod  time.Time // for detecting external writes (e.g. the bookmarklet)
 	lastSize int64
+
+	focus     int      // focusList or focusSidebar
+	folders   []string // sidebar entries (folderAll, names…, folderNone)
+	counts    map[string]int
+	folderSel int
 }
 
-var confirmStyle = lipgloss.NewStyle().Padding(1, 2)
+// focus identifies which pane has keyboard focus.
+const (
+	focusList = iota
+	focusSidebar
+)
+
+// Sentinel sidebar keys (real folder names can't contain a NUL byte).
+const (
+	folderAll  = "\x00all"
+	folderNone = "\x00none"
+)
+
+const sidebarInner = 20 // sidebar content width
+
+var (
+	confirmStyle      = lipgloss.NewStyle().Padding(1, 2)
+	sidebarBox        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
+	sidebarHeadStyle  = lipgloss.NewStyle().Bold(true)
+	sidebarSelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
+	activeBorderColor = lipgloss.Color("170")
+	dimBorderColor    = lipgloss.Color("240")
+)
+
+func computeFolders(books []*Bookmark) ([]string, map[string]int) {
+	counts := map[string]int{}
+	set := map[string]bool{}
+	hasNone := false
+	for _, b := range books {
+		counts[folderAll]++
+		if b.Folder == "" {
+			hasNone = true
+			counts[folderNone]++
+		} else {
+			set[b.Folder] = true
+			counts[b.Folder]++
+		}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	folders := append([]string{folderAll}, names...)
+	if hasNone {
+		folders = append(folders, folderNone)
+	}
+	return folders, counts
+}
+
+func folderLabel(key string) string {
+	switch key {
+	case folderAll:
+		return "All"
+	case folderNone:
+		return "(none)"
+	default:
+		return key
+	}
+}
+
+func folderMatches(b *Bookmark, key string) bool {
+	switch key {
+	case folderAll:
+		return true
+	case folderNone:
+		return b.Folder == ""
+	default:
+		return b.Folder == key
+	}
+}
+
+func itemsFor(books []*Bookmark, folderKey string) []list.Item {
+	var sel []*Bookmark
+	for _, b := range books {
+		if folderMatches(b, folderKey) {
+			sel = append(sel, b)
+		}
+	}
+	return sortedItems(sel)
+}
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if n <= 0 {
+		return ""
+	}
+	if len(r) <= n {
+		return s
+	}
+	if n == 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
+}
 
 func newModel(path string, books []*Bookmark) model {
+	folders, counts := computeFolders(books)
 	d := list.NewDefaultDelegate()
-	l := list.New(sortedItems(books), d, 0, 0)
+	l := list.New(itemsFor(books, folderAll), d, 0, 0)
 	l.Title = "bookmarks"
 	l.SetStatusBarItemName("bookmark", "bookmarks")
 	l.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab/h", "folders")),
 			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		}
 	}
-	m := model{path: path, books: books, list: l}
+	m := model{path: path, books: books, list: l, folders: folders, counts: counts}
 	m.stampMod()
 	return m
+}
+
+func (m *model) toggleFocus() {
+	if m.focus == focusList {
+		m.focus = focusSidebar
+	} else {
+		m.focus = focusList
+	}
+}
+
+// applyFolder reloads the bookmark pane for the currently selected folder.
+func (m *model) applyFolder() {
+	m.list.ResetFilter()
+	m.list.SetItems(itemsFor(m.books, m.folders[m.folderSel]))
+	m.list.Select(0)
+}
+
+func (m *model) moveFolder(delta int) {
+	n := len(m.folders)
+	if n == 0 {
+		return
+	}
+	m.folderSel += delta
+	if m.folderSel < 0 {
+		m.folderSel = 0
+	}
+	if m.folderSel >= n {
+		m.folderSel = n - 1
+	}
+	m.applyFolder()
+}
+
+// layout sizes the bookmark pane to the space left of the sidebar.
+func (m *model) layout() {
+	listW := m.w - (sidebarInner + 2) - 1 // sidebar border + a gap
+	if listW < 10 {
+		listW = 10
+	}
+	h := m.h
+	if h < 1 {
+		h = 1
+	}
+	m.list.SetSize(listW, h)
 }
 
 type tickMsg time.Time
@@ -268,13 +411,28 @@ func tickCmd() tea.Cmd {
 
 func (m model) Init() tea.Cmd { return tickCmd() }
 
-// refresh rebuilds the list, keeping the cursor on the same bookmark if it survives.
+// refresh rebuilds folders and the list, keeping the selected folder and the
+// cursor on the same bookmark if they survive the change.
 func (m *model) refresh() {
 	var selURL string
 	if it, ok := m.list.SelectedItem().(item); ok {
 		selURL = it.b.URL
 	}
-	m.list.SetItems(sortedItems(m.books))
+	selFolder := folderAll
+	if m.folderSel < len(m.folders) {
+		selFolder = m.folders[m.folderSel]
+	}
+
+	m.folders, m.counts = computeFolders(m.books)
+	m.folderSel = 0 // default to "All" if the old folder vanished
+	for i, f := range m.folders {
+		if f == selFolder {
+			m.folderSel = i
+			break
+		}
+	}
+
+	m.list.SetItems(itemsFor(m.books, m.folders[m.folderSel]))
 	if selURL != "" {
 		for i, li := range m.list.Items() {
 			if it, ok := li.(item); ok && it.b.URL == selURL {
@@ -366,32 +524,62 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.list.SetSize(msg.Width, msg.Height)
+		m.layout()
 	case tea.KeyMsg:
-		if m.list.FilterState() != list.Filtering { // don't steal keys mid-filter
+		// While the bookmark filter is open, let it consume everything.
+		if m.focus == focusList && m.list.FilterState() == list.Filtering {
+			break
+		}
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+		case "tab":
+			m.toggleFocus()
+			return m, nil
+		}
+
+		if m.focus == focusSidebar {
 			switch msg.String() {
-			case "ctrl+c", "q":
-				return m, tea.Quit
-			case "enter":
-				if it, ok := m.list.SelectedItem().(item); ok {
-					return m, openURL(it.b.URL)
-				}
-				return m, nil
-			case "e":
-				if it, ok := m.list.SelectedItem().(item); ok {
-					m.target = it.b
-					m.form = m.newEditForm(it.b)
-					m.state = editing
-					return m, m.form.Init()
-				}
-				return m, nil
-			case "d":
-				if it, ok := m.list.SelectedItem().(item); ok {
-					m.target = it.b
-					m.state = confirming
-				}
-				return m, nil
+			case "j", "down":
+				m.moveFolder(1)
+			case "k", "up":
+				m.moveFolder(-1)
+			case "g", "home":
+				m.folderSel = 0
+				m.applyFolder()
+			case "G", "end":
+				m.folderSel = len(m.folders) - 1
+				m.applyFolder()
+			case "l", "right", "enter":
+				m.focus = focusList
 			}
+			return m, nil // the sidebar consumes all other keys
+		}
+
+		// focus == focusList
+		switch msg.String() {
+		case "h", "left":
+			m.focus = focusSidebar
+			return m, nil
+		case "enter":
+			if it, ok := m.list.SelectedItem().(item); ok {
+				return m, openURL(it.b.URL)
+			}
+			return m, nil
+		case "e":
+			if it, ok := m.list.SelectedItem().(item); ok {
+				m.target = it.b
+				m.form = m.newEditForm(it.b)
+				m.state = editing
+				return m, m.form.Init()
+			}
+			return m, nil
+		case "d":
+			if it, ok := m.list.SelectedItem().(item); ok {
+				m.target = it.b
+				m.state = confirming
+			}
+			return m, nil
 		}
 	}
 	var cmd tea.Cmd
@@ -461,10 +649,48 @@ func (m model) View() string {
 			"Delete this bookmark?\n\n  %s\n  %s\n\n  (y) yes    (n) no",
 			label, m.target.URL))
 	}
+	view := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.list.View())
 	if m.err != "" {
-		return m.list.View() + "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("error: "+m.err)
+		view += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("error: "+m.err)
 	}
-	return m.list.View()
+	return view
+}
+
+func (m model) sidebarView() string {
+	var b strings.Builder
+	b.WriteString(sidebarHeadStyle.Render("folders"))
+	b.WriteString("\n\n")
+	for i, f := range m.folders {
+		marker := "  "
+		if i == m.folderSel {
+			marker = "› "
+		}
+		label := folderLabel(f)
+		count := fmt.Sprintf("%d", m.counts[f])
+		avail := sidebarInner - lipgloss.Width(marker) - lipgloss.Width(count) - 1
+		label = truncate(label, avail)
+		gap := sidebarInner - lipgloss.Width(marker) - lipgloss.Width(label) - lipgloss.Width(count)
+		if gap < 1 {
+			gap = 1
+		}
+		row := marker + label + strings.Repeat(" ", gap) + count
+		if i == m.folderSel {
+			row = sidebarSelStyle.Render(row)
+		}
+		b.WriteString(row + "\n")
+	}
+
+	h := m.h - 2 // account for the border
+	if h < 1 {
+		h = 1
+	}
+	box := sidebarBox.Width(sidebarInner).Height(h)
+	if m.focus == focusSidebar {
+		box = box.BorderForeground(activeBorderColor)
+	} else {
+		box = box.BorderForeground(dimBorderColor)
+	}
+	return box.Render(b.String())
 }
 
 // reformat reads a bookmarks file and prints it in canonical form to stdout.

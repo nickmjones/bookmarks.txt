@@ -66,9 +66,19 @@ go build -o bmtui .
 ./bmtui              # run from a dir where it can find bookmarks.txt, or set BM_FILE
 ```
 
-Keys: `↑/↓` or `j/k` move · `/` filter · `enter` open in browser · `e` edit ·
-`d` delete · `q` quit. It polls the file once a second, so bookmarks saved via
-the bookmarklet appear automatically while it's open.
+The UI is two panes: a **folder sidebar** on the left and the bookmark list on
+the right. Selecting a folder filters the list (`All` and `(none)` are always
+available, with counts).
+
+Keys:
+
+- `tab` / `h` / `l` — move focus between the folder sidebar and the list
+- `j` / `k` (or `↑` / `↓`) — move within the focused pane; `g` / `G` jump to
+  top / bottom of the folder list
+- `/` filter · `enter` open in browser · `e` edit · `d` delete · `q` quit
+
+It polls the file once a second, so bookmarks saved via the bookmarklet appear
+automatically while it's open.
 
 Tagged releases (`vX.Y.Z`) publish prebuilt `bmtui` binaries via GoReleaser, so
 you don't need Go installed to use the TUI — grab one from the Releases page.

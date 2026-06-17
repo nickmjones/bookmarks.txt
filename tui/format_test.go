@@ -2,8 +2,98 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+func sendKey(m model, k string) model {
+	var msg tea.KeyMsg
+	switch k {
+	case "tab":
+		msg = tea.KeyMsg{Type: tea.KeyTab}
+	case "enter":
+		msg = tea.KeyMsg{Type: tea.KeyEnter}
+	default:
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+	}
+	nm, _ := m.Update(msg)
+	return nm.(model)
+}
+
+func TestComputeFoldersAndFilter(t *testing.T) {
+	books := []*Bookmark{
+		{URL: "https://a", Folder: "x", Added: "2026-01-01"},
+		{URL: "https://b", Folder: "y", Added: "2026-01-02"},
+		{URL: "https://c", Added: "2026-01-03"}, // no folder
+	}
+	folders, counts := computeFolders(books)
+	want := []string{folderAll, "x", "y", folderNone}
+	if len(folders) != len(want) {
+		t.Fatalf("folders = %v, want %v", folders, want)
+	}
+	for i := range want {
+		if folders[i] != want[i] {
+			t.Fatalf("folders = %v, want %v", folders, want)
+		}
+	}
+	if counts[folderAll] != 3 || counts["x"] != 1 || counts[folderNone] != 1 {
+		t.Fatalf("counts = %v", counts)
+	}
+	if n := len(itemsFor(books, "x")); n != 1 {
+		t.Fatalf("folder x items = %d, want 1", n)
+	}
+	if n := len(itemsFor(books, folderNone)); n != 1 {
+		t.Fatalf("(none) items = %d, want 1", n)
+	}
+	if n := len(itemsFor(books, folderAll)); n != 3 {
+		t.Fatalf("All items = %d, want 3", n)
+	}
+}
+
+func TestFocusAndFolderNav(t *testing.T) {
+	books := []*Bookmark{
+		{URL: "https://a", Folder: "x", Added: "1"},
+		{URL: "https://b", Folder: "y", Added: "2"},
+	}
+	m := newModel(t.TempDir()+"/b.txt", books)
+	if m.focus != focusList {
+		t.Fatal("should start focused on the list")
+	}
+	m = sendKey(m, "tab") // -> sidebar
+	if m.focus != focusSidebar {
+		t.Fatal("tab did not focus the sidebar")
+	}
+	m = sendKey(m, "j") // All -> x
+	if m.folders[m.folderSel] != "x" {
+		t.Fatalf("expected folder x, got %q", m.folders[m.folderSel])
+	}
+	if n := len(m.list.Items()); n != 1 {
+		t.Fatalf("list should be filtered to 1 item, got %d", n)
+	}
+	m = sendKey(m, "l") // -> list
+	if m.focus != focusList {
+		t.Fatal("l did not return focus to the list")
+	}
+	m = sendKey(m, "h") // -> sidebar again
+	if m.focus != focusSidebar {
+		t.Fatal("h did not focus the sidebar")
+	}
+}
+
+func TestTwoPaneRenders(t *testing.T) {
+	books := []*Bookmark{{URL: "https://a", Title: "A", Folder: "work", Added: "2026-01-01"}}
+	m := newModel(t.TempDir()+"/b.txt", books)
+	nm, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	out := nm.(model).View()
+	if !strings.Contains(out, "folders") {
+		t.Fatal("sidebar header missing from view")
+	}
+	if !strings.Contains(out, "work") {
+		t.Fatal("folder name missing from sidebar")
+	}
+}
 
 func TestRoundTrip(t *testing.T) {
 	cases := []string{
