@@ -9,6 +9,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -221,6 +223,7 @@ const (
 	browsing state = iota
 	editing
 	confirming
+	adding
 )
 
 type model struct {
@@ -232,6 +235,7 @@ type model struct {
 
 	form    *huh.Form
 	target  *Bookmark // the bookmark being edited or deleted
+	fURL    string
 	fTitle  string
 	fFolder string
 	fNotes  string
@@ -327,6 +331,64 @@ func itemsFor(books []*Bookmark, folderKey string) []list.Item {
 	return sortedItems(sel)
 }
 
+// trackingParams are query keys dropped during normalization. Keep in sync
+// with TRACKING_PARAMS in bm.py.
+var trackingParams = map[string]bool{
+	"utm_source": true, "utm_medium": true, "utm_campaign": true,
+	"utm_term": true, "utm_content": true, "fbclid": true, "gclid": true,
+	"dclid": true, "msclkid": true, "mc_cid": true, "mc_eid": true,
+	"ref": true, "ref_src": true, "ref_url": true, "igshid": true,
+	"_hsenc": true, "_hsmi": true,
+}
+
+// normalizeURL is the canonical dedup key. Port of normalize_url in bm.py;
+// the two must agree so the service and the TUI dedupe the same way.
+func normalizeURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return strings.ToLower(raw)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme == "" {
+		scheme = "https"
+	}
+	host := strings.ToLower(u.Hostname())
+	netloc := host
+	if p := u.Port(); p != "" && !((scheme == "http" && p == "80") || (scheme == "https" && p == "443")) {
+		netloc = host + ":" + p
+	}
+	path := u.Path
+	if path == "" {
+		path = "/" // treat bare host and host/ as the same bookmark
+	} else if len(path) > 1 && strings.HasSuffix(path, "/") {
+		path = strings.TrimRight(path, "/")
+	}
+	var kept []string
+	if u.RawQuery != "" {
+		for _, pair := range strings.Split(u.RawQuery, "&") {
+			if pair == "" {
+				continue
+			}
+			key := pair
+			if i := strings.IndexByte(pair, '='); i >= 0 {
+				key = pair[:i]
+			}
+			if trackingParams[strings.ToLower(key)] {
+				continue
+			}
+			kept = append(kept, pair)
+		}
+	}
+	out := scheme + "://" + netloc + path
+	if len(kept) > 0 {
+		out += "?" + strings.Join(kept, "&")
+	}
+	return out // fragment dropped
+}
+
+func today() string { return time.Now().Format("2006-01-02") }
+
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if n <= 0 {
@@ -350,6 +412,7 @@ func newModel(path string, books []*Bookmark) model {
 	l.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab/h", "folders")),
+			key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("ctrl+k", "add from clipboard")),
 			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
 			key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 			key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
@@ -476,6 +539,14 @@ func (m *model) persist() {
 	m.stampMod() // our own write; don't let the next tick reload over it
 }
 
+func (m *model) formWidth() int {
+	w := m.w
+	if w > 72 || w == 0 {
+		w = 72
+	}
+	return w
+}
+
 func (m *model) newEditForm(b *Bookmark) *huh.Form {
 	m.fTitle, m.fFolder, m.fNotes = b.Title, b.Folder, b.Notes
 	f := huh.NewForm(huh.NewGroup(
@@ -483,11 +554,50 @@ func (m *model) newEditForm(b *Bookmark) *huh.Form {
 		huh.NewInput().Title("Folder").Value(&m.fFolder),
 		huh.NewText().Title("Notes").Value(&m.fNotes),
 	))
-	w := m.w
-	if w > 72 || w == 0 {
-		w = 72
+	return f.WithWidth(m.formWidth())
+}
+
+func (m *model) newAddForm(url, folder string) *huh.Form {
+	m.fURL, m.fTitle, m.fFolder, m.fNotes = url, "", folder, ""
+	f := huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("URL").Value(&m.fURL),
+		huh.NewInput().Title("Title").Value(&m.fTitle),
+		huh.NewInput().Title("Folder").Value(&m.fFolder),
+		huh.NewText().Title("Notes").Value(&m.fNotes),
+	))
+	return f.WithWidth(m.formWidth())
+}
+
+// addOrMerge appends a new bookmark, or merges into an existing one with the
+// same normalized URL. Mirrors add_or_merge in bm.py.
+func (m *model) addOrMerge(url, title, folder, notes string) {
+	norm := normalizeURL(url)
+	for _, b := range m.books {
+		if normalizeURL(b.URL) == norm {
+			if title != "" && b.Title == "" {
+				b.Title = title
+			}
+			if folder != "" {
+				b.Folder = folder
+			}
+			if notes != "" {
+				b.Notes = notes
+			}
+			return
+		}
 	}
-	return f.WithWidth(w)
+	m.books = append(m.books, &Bookmark{
+		URL: url, Title: title, Folder: folder, Notes: notes, Added: today(),
+	})
+}
+
+func (m *model) selectURL(url string) {
+	for i, li := range m.list.Items() {
+		if it, ok := li.(item); ok && it.b.URL == url {
+			m.list.Select(i)
+			return
+		}
+	}
 }
 
 func openURL(url string) tea.Cmd {
@@ -517,6 +627,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case editing:
 		return m.updateEditing(msg)
+	case adding:
+		return m.updateAdding(msg)
 	case confirming:
 		return m.updateConfirming(msg)
 	}
@@ -536,6 +648,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			m.toggleFocus()
 			return m, nil
+		case "ctrl+k":
+			clip, err := clipboard.ReadAll()
+			if err != nil {
+				m.err = "clipboard: " + err.Error()
+				return m, nil
+			}
+			m.err = ""
+			defFolder := ""
+			if f := m.folders[m.folderSel]; f != folderAll && f != folderNone {
+				defFolder = f
+			}
+			m.form = m.newAddForm(strings.TrimSpace(clip), defFolder)
+			m.state = adding
+			return m, m.form.Init()
 		}
 
 		if m.focus == focusSidebar {
@@ -615,6 +741,49 @@ func (m model) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
+		m.state = browsing
+		m.form = nil
+		return m, nil
+	}
+	fm, cmd := m.form.Update(msg)
+	if f, ok := fm.(*huh.Form); ok {
+		m.form = f
+	}
+	switch m.form.State {
+	case huh.StateCompleted:
+		u := strings.TrimSpace(m.fURL)
+		if u != "" {
+			folder := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.fFolder), "#"))
+			m.addOrMerge(u, strings.TrimSpace(m.fTitle), folder, strings.TrimSpace(m.fNotes))
+			m.persist()
+			m.refresh()
+			// Jump to the new/updated bookmark in its folder so it's visible.
+			target := folderAll
+			if folder != "" {
+				target = folder
+			}
+			for i, f := range m.folders {
+				if f == target {
+					m.folderSel = i
+					break
+				}
+			}
+			m.applyFolder()
+			m.selectURL(u)
+		}
+		m.state = browsing
+		m.form = nil
+		return m, nil
+	case huh.StateAborted:
+		m.state = browsing
+		m.form = nil
+		return m, nil
+	}
+	return m, cmd
+}
+
 func (m model) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
@@ -638,7 +807,7 @@ func (m model) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	switch m.state {
-	case editing:
+	case editing, adding:
 		return m.form.View()
 	case confirming:
 		label := m.target.Title

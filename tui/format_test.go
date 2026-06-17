@@ -82,6 +82,47 @@ func TestFocusAndFolderNav(t *testing.T) {
 	}
 }
 
+func TestNormalizeURL(t *testing.T) {
+	// Expected values must match normalize_url in bm.py.
+	cases := map[string]string{
+		"https://example.com":                       "https://example.com/",
+		"https://Example.com/":                      "https://example.com/",
+		"https://github.com/charmbracelet/":         "https://github.com/charmbracelet",
+		"https://www.apple.com/?utm_source=test":    "https://www.apple.com/",
+		"http://x.com:80/a/?utm_source=hn&q=1#frag": "http://x.com/a?q=1",
+	}
+	for in, want := range cases {
+		if got := normalizeURL(in); got != want {
+			t.Errorf("normalizeURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAddOrMerge(t *testing.T) {
+	m := newModel(t.TempDir()+"/b.txt", []*Bookmark{
+		{URL: "https://www.apple.com", Title: "Apple", Folder: "technology", Added: "2026-06-16"},
+	})
+	// Same URL up to normalization -> merge, not duplicate.
+	m.addOrMerge("https://www.apple.com/?utm_source=x", "Apple Inc", "tech", "a note")
+	if len(m.books) != 1 {
+		t.Fatalf("expected merge (1 book), got %d", len(m.books))
+	}
+	if m.books[0].Title != "Apple" { // existing non-empty title not clobbered
+		t.Errorf("title = %q, want Apple", m.books[0].Title)
+	}
+	if m.books[0].Folder != "tech" || m.books[0].Notes != "a note" {
+		t.Errorf("folder/notes not merged: %+v", m.books[0])
+	}
+	// Genuinely new URL -> append.
+	m.addOrMerge("https://new.example", "New", "", "")
+	if len(m.books) != 2 {
+		t.Fatalf("expected append (2 books), got %d", len(m.books))
+	}
+	if m.books[1].Added == "" {
+		t.Error("new bookmark should get an added: date")
+	}
+}
+
 func TestTwoPaneRenders(t *testing.T) {
 	books := []*Bookmark{{URL: "https://a", Title: "A", Folder: "work", Added: "2026-01-01"}}
 	m := newModel(t.TempDir()+"/b.txt", books)
