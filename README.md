@@ -60,11 +60,21 @@ run it on localhost or behind a VPN, not the public internet.
 
 ### Terminal UI
 
+Install it onto your `PATH` so you can run `bmtui` from anywhere:
+
 ```sh
-cd tui
-go build -o bmtui .
-./bmtui              # run from a dir where it can find bookmarks.txt, or set BM_FILE
+make install                                   # builds + copies to ~/.local/bin
+# or, for Go users:
+go install github.com/nickmjones/bookmarks.txt/bmtui@latest
+# or just build in place:
+cd bmtui && go build -o bmtui . && ./bmtui
 ```
+
+Run as an installed binary, it reads `$BM_FILE`, else a project-local
+`./bookmarks.txt` if you're in one, else the per-user default
+`~/.config/bmtui/bookmarks.txt` (respecting `$XDG_CONFIG_HOME`), creating it on
+first add. `bm.py` resolves the file the same way, so the service and the TUI
+share one file.
 
 The UI is two panes: a **folder sidebar** on the left and the bookmark list on
 the right. Selecting a folder filters the list (`All` and `(none)` are always
@@ -96,7 +106,7 @@ for tidying hand-edited files:
 
 ```sh
 python3 bm.py --reformat bookmarks.txt
-tui/bmtui --reformat bookmarks.txt
+bmtui --reformat bookmarks.txt
 ```
 
 The two implementations are checked for byte-identical output in CI.
@@ -108,16 +118,17 @@ The two implementations are checked for byte-identical output in CI.
   is a neutral contract.
 - **De-dup belongs to the tools, not the format.** Unlike a todo, a bookmark has
   a natural identity (its normalized URL), so the service de-dupes/merges on add.
-- **Two parsers, one format.** `bm.py` and `tui/main.go` each implement the
+- **Two parsers, one format.** `bm.py` and `bmtui/main.go` each implement the
   format independently; their output is verified byte-identical
-  (`tui/format_test.go`). Keep them in sync if the format changes.
+  (`bmtui/format_test.go`). Keep them in sync if the format changes.
 
 ## Repo layout
 
 ```
 SPEC.md                 the format specification
 bm.py                   capture service + web UI + bookmarklet
-tui/                    bmtui — Bubble Tea browse/curate TUI (Go module)
+bmtui/                  bmtui — Bubble Tea browse/curate TUI (Go module)
+Makefile                build / install / test
 bookmarks.example.txt   sample data; copy to bookmarks.txt to start
 ```
 

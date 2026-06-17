@@ -25,8 +25,18 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import (parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-FILE = os.environ.get("BM_FILE", os.path.join(HERE, "bookmarks.txt"))
+def default_file():
+    """Per-user default: $XDG_CONFIG_HOME/bmtui/bookmarks.txt (~/.config/bmtui/…).
+    A project-local ./bookmarks.txt takes precedence when present. Keep in sync
+    with resolveFile/defaultFile in bmtui so both tools share one file."""
+    if os.path.exists("bookmarks.txt"):
+        return os.path.abspath("bookmarks.txt")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config")
+    return os.path.join(base, "bmtui", "bookmarks.txt")
+
+
+FILE = os.environ.get("BM_FILE") or default_file()
 HOST = os.environ.get("BM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BM_PORT", "8888"))
 
@@ -171,6 +181,9 @@ def load():
 
 
 def save(recs):
+    parent = os.path.dirname(FILE)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     tmp = FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         for r in recs:

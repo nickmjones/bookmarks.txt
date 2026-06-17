@@ -4,7 +4,7 @@ bookmarks.txt
 *.tmp
 
 # Built TUI binary
-/tui/bmtui
+/bmtui/bmtui
 
 # Python
 __pycache__/

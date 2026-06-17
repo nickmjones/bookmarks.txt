@@ -17,12 +17,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: tui/go.mod
+          go-version-file: bmtui/go.mod
 
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
-          workdir: tui
+          workdir: bmtui
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

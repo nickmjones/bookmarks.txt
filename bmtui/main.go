@@ -152,6 +152,11 @@ func save(path string, books []*Bookmark) error {
 		sb.WriteString(formatLine(b))
 		sb.WriteByte('\n')
 	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
 		return err
@@ -159,14 +164,30 @@ func save(path string, books []*Bookmark) error {
 	return os.Rename(tmp, path) // atomic
 }
 
+// resolveFile picks the bookmarks file: $BM_FILE, else a project-local
+// ./bookmarks.txt when present, else the per-user default. Keep in sync with
+// bm.py so the service and the TUI agree on where the file lives.
 func resolveFile() string {
 	if p := os.Getenv("BM_FILE"); p != "" {
 		return p
 	}
 	if _, err := os.Stat("bookmarks.txt"); err == nil {
-		return "bookmarks.txt"
+		return "bookmarks.txt" // convenience when run inside the project
 	}
-	return filepath.Join("..", "bookmarks.txt")
+	return defaultFile()
+}
+
+// defaultFile is $XDG_CONFIG_HOME/bmtui/bookmarks.txt (≈ ~/.config/bmtui/…).
+func defaultFile() string {
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "bookmarks.txt"
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "bmtui", "bookmarks.txt")
 }
 
 // ---------------------------------------------------------------------------

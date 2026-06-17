@@ -1,4 +1,4 @@
-module bmtui
+module github.com/nickmjones/bookmarks.txt/bmtui
 
 go 1.26.4
 
