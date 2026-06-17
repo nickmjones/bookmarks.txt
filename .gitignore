@@ -1,0 +1,15 @@
+# Personal bookmark data — keep your own bookmarks out of the repo.
+# Start from bookmarks.example.txt instead (see the README).
+bookmarks.txt
+*.tmp
+
+# Built TUI binary
+/tui/bmtui
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS / tooling
+.claude/
+.DS_Store

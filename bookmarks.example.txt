@@ -1,0 +1,5 @@
+https://www.apple.com "Apple" #technology [makes computers and operating systems] added:2026-06-16
+https://github.com/charmbracelet "Charmbracelet" #technology [produces tools for making terminal apps] added:2026-06-16
+https://specification.website/ "The Website Specification" #technology [a platform-agnostic spec of features every decent website should have] added:2026-06-16
+https://onepagelove.com/ "One Page Love" #inspo [a collection of excellent one page websites] added:2026-06-16
+https://danluu.com/input-lag/
