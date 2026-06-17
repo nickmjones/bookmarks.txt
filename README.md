@@ -75,9 +75,13 @@ Keys:
 - `tab` / `h` / `l` — move focus between the folder sidebar and the list
 - `j` / `k` (or `↑` / `↓`) — move within the focused pane; `g` / `G` jump to
   top / bottom of the folder list
-- `ctrl+k` — add a bookmark from the clipboard (opens a form pre-filled with the
-  copied URL; de-dupes/merges like the service)
+- `ctrl+k` — add a bookmark from the clipboard (opens a floating palette
+  pre-filled with the copied URL; de-dupes/merges like the service)
 - `/` filter · `enter` open in browser · `e` edit · `d` delete · `q` quit
+
+Add (`ctrl+k`) and edit (`e`) open a floating palette over the UI. Within it:
+`tab` / `↓` and `shift+tab` / `↑` move between fields (wrapping), `enter` saves,
+`esc` cancels.
 
 It polls the file once a second, so bookmarks saved via the bookmarklet appear
 automatically while it's open.

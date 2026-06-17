@@ -21,9 +21,10 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ---------------------------------------------------------------------------
@@ -233,13 +234,9 @@ type model struct {
 	state state
 	w, h  int
 
-	form    *huh.Form
-	target  *Bookmark // the bookmark being edited or deleted
-	fURL    string
-	fTitle  string
-	fFolder string
-	fNotes  string
-	err     string
+	pal    palette   // the floating add/edit palette
+	target *Bookmark // the bookmark being edited or deleted
+	err    string
 
 	lastMod  time.Time // for detecting external writes (e.g. the bookmarklet)
 	lastSize int64
@@ -265,12 +262,19 @@ const (
 const sidebarInner = 20 // sidebar content width
 
 var (
-	confirmStyle      = lipgloss.NewStyle().Padding(1, 2)
-	sidebarBox        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
-	sidebarHeadStyle  = lipgloss.NewStyle().Bold(true)
-	sidebarSelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170"))
 	activeBorderColor = lipgloss.Color("170")
 	dimBorderColor    = lipgloss.Color("240")
+
+	confirmStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("9")).Padding(1, 2)
+	sidebarBox       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder())
+	sidebarHeadStyle = lipgloss.NewStyle().Bold(true)
+	sidebarSelStyle  = lipgloss.NewStyle().Bold(true).Foreground(activeBorderColor)
+
+	paletteBox        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(activeBorderColor).Padding(1, 2)
+	paletteTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(activeBorderColor)
+	paletteLabelStyle = lipgloss.NewStyle().Faint(true)
+	paletteFocusStyle = lipgloss.NewStyle().Bold(true).Foreground(activeBorderColor)
+	paletteHelpStyle  = lipgloss.NewStyle().Foreground(dimBorderColor)
 )
 
 func computeFolders(books []*Bookmark) ([]string, map[string]int) {
@@ -539,33 +543,121 @@ func (m *model) persist() {
 	m.stampMod() // our own write; don't let the next tick reload over it
 }
 
-func (m *model) formWidth() int {
-	w := m.w
-	if w > 72 || w == 0 {
-		w = 72
+// ---------------------------------------------------------------------------
+// Floating add/edit palette
+// ---------------------------------------------------------------------------
+
+type paletteField struct{ label, value, placeholder string }
+
+type palette struct {
+	title  string
+	labels []string
+	inputs []textinput.Model
+	focus  int
+}
+
+func newPalette(title string, fields []paletteField) palette {
+	p := palette{title: title}
+	for _, f := range fields {
+		ti := textinput.New()
+		ti.Prompt = ""
+		ti.SetValue(f.value)
+		ti.Placeholder = f.placeholder
+		ti.Width = 44
+		p.labels = append(p.labels, f.label)
+		p.inputs = append(p.inputs, ti)
 	}
-	return w
+	if len(p.inputs) > 0 {
+		p.inputs[0].Focus()
+	}
+	return p
 }
 
-func (m *model) newEditForm(b *Bookmark) *huh.Form {
-	m.fTitle, m.fFolder, m.fNotes = b.Title, b.Folder, b.Notes
-	f := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("Title").Value(&m.fTitle),
-		huh.NewInput().Title("Folder").Value(&m.fFolder),
-		huh.NewText().Title("Notes").Value(&m.fNotes),
-	))
-	return f.WithWidth(m.formWidth())
+// move changes the focused field, wrapping around.
+func (p *palette) move(d int) {
+	n := len(p.inputs)
+	if n == 0 {
+		return
+	}
+	p.inputs[p.focus].Blur()
+	p.focus = (p.focus + d + n) % n
+	p.inputs[p.focus].Focus()
 }
 
-func (m *model) newAddForm(url, folder string) *huh.Form {
-	m.fURL, m.fTitle, m.fFolder, m.fNotes = url, "", folder, ""
-	f := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("URL").Value(&m.fURL),
-		huh.NewInput().Title("Title").Value(&m.fTitle),
-		huh.NewInput().Title("Folder").Value(&m.fFolder),
-		huh.NewText().Title("Notes").Value(&m.fNotes),
-	))
-	return f.WithWidth(m.formWidth())
+func (p *palette) update(msg tea.Msg) tea.Cmd {
+	if len(p.inputs) == 0 {
+		return nil
+	}
+	var cmd tea.Cmd
+	p.inputs[p.focus], cmd = p.inputs[p.focus].Update(msg)
+	return cmd
+}
+
+func (p palette) value(i int) string { return p.inputs[i].Value() }
+
+func (p palette) view() string {
+	labelW := 0
+	for _, l := range p.labels {
+		if len(l) > labelW {
+			labelW = len(l)
+		}
+	}
+	var b strings.Builder
+	b.WriteString(paletteTitleStyle.Render(p.title))
+	b.WriteString("\n\n")
+	for i := range p.inputs {
+		marker := "  "
+		if i == p.focus {
+			marker = paletteFocusStyle.Render("› ")
+		}
+		lbl := paletteLabelStyle.Render(fmt.Sprintf("%-*s", labelW, p.labels[i]))
+		b.WriteString(marker + lbl + "  " + p.inputs[i].View() + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(paletteHelpStyle.Render("enter save · tab/⇧tab move · esc cancel"))
+	return paletteBox.Render(b.String())
+}
+
+func cleanFolder(s string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "#"))
+}
+
+// overlayCenter composites fg centered over bg. Both may contain ANSI styling;
+// ansi.Truncate/TruncateLeft slice the background by display cell, not byte.
+func overlayCenter(bg, fg string, w, h int) string {
+	bgLines := strings.Split(bg, "\n")
+	for len(bgLines) < h {
+		bgLines = append(bgLines, "")
+	}
+	fgLines := strings.Split(fg, "\n")
+	fgW := 0
+	for _, l := range fgLines {
+		if x := ansi.StringWidth(l); x > fgW {
+			fgW = x
+		}
+	}
+	x := (w - fgW) / 2
+	if x < 0 {
+		x = 0
+	}
+	y := (h - len(fgLines)) / 2
+	if y < 0 {
+		y = 0
+	}
+	for i, fl := range fgLines {
+		row := y + i
+		if row < 0 || row >= len(bgLines) {
+			continue
+		}
+		bl := bgLines[row]
+		left := ansi.Truncate(bl, x, "")
+		if pad := x - ansi.StringWidth(left); pad > 0 {
+			left += strings.Repeat(" ", pad)
+		}
+		right := ansi.TruncateLeft(bl, x+ansi.StringWidth(fl), "")
+		bgLines[row] = left + fl + right
+	}
+	return strings.Join(bgLines, "\n")
 }
 
 // addOrMerge appends a new bookmark, or merges into an existing one with the
@@ -659,9 +751,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if f := m.folders[m.folderSel]; f != folderAll && f != folderNone {
 				defFolder = f
 			}
-			m.form = m.newAddForm(strings.TrimSpace(clip), defFolder)
+			m.pal = newPalette("Add bookmark", []paletteField{
+				{"URL", strings.TrimSpace(clip), "https://…"},
+				{"Title", "", "title"},
+				{"Folder", defFolder, "folder"},
+				{"Notes", "", "why this matters"},
+			})
 			m.state = adding
-			return m, m.form.Init()
+			return m, textinput.Blink
 		}
 
 		if m.focus == focusSidebar {
@@ -695,9 +792,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "e":
 			if it, ok := m.list.SelectedItem().(item); ok {
 				m.target = it.b
-				m.form = m.newEditForm(it.b)
+				m.pal = newPalette("Edit bookmark", []paletteField{
+					{"Title", it.b.Title, "title"},
+					{"Folder", it.b.Folder, "folder"},
+					{"Notes", it.b.Notes, "notes"},
+				})
 				m.state = editing
-				return m, m.form.Init()
+				return m, textinput.Blink
 			}
 			return m, nil
 		case "d":
@@ -714,73 +815,69 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateEditing(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
-		m.state = browsing
-		m.form = nil
-		return m, nil
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "esc":
+			m.state = browsing
+			return m, nil
+		case "tab", "down":
+			m.pal.move(1)
+			return m, nil
+		case "shift+tab", "up":
+			m.pal.move(-1)
+			return m, nil
+		case "enter":
+			m.target.Title = strings.TrimSpace(m.pal.value(0))
+			m.target.Folder = cleanFolder(m.pal.value(1))
+			m.target.Notes = strings.TrimSpace(m.pal.value(2))
+			m.persist()
+			m.refresh()
+			m.state = browsing
+			return m, nil
+		}
 	}
-	fm, cmd := m.form.Update(msg)
-	if f, ok := fm.(*huh.Form); ok {
-		m.form = f
-	}
-	switch m.form.State {
-	case huh.StateCompleted:
-		m.target.Title = strings.TrimSpace(m.fTitle)
-		m.target.Folder = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.fFolder), "#"))
-		m.target.Notes = strings.TrimSpace(m.fNotes)
-		m.persist()
-		m.refresh()
-		m.state = browsing
-		m.form = nil
-		return m, nil
-	case huh.StateAborted:
-		m.state = browsing
-		m.form = nil
-		return m, nil
-	}
+	cmd := m.pal.update(msg)
 	return m, cmd
 }
 
 func (m model) updateAdding(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
-		m.state = browsing
-		m.form = nil
-		return m, nil
-	}
-	fm, cmd := m.form.Update(msg)
-	if f, ok := fm.(*huh.Form); ok {
-		m.form = f
-	}
-	switch m.form.State {
-	case huh.StateCompleted:
-		u := strings.TrimSpace(m.fURL)
-		if u != "" {
-			folder := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.fFolder), "#"))
-			m.addOrMerge(u, strings.TrimSpace(m.fTitle), folder, strings.TrimSpace(m.fNotes))
-			m.persist()
-			m.refresh()
-			// Jump to the new/updated bookmark in its folder so it's visible.
-			target := folderAll
-			if folder != "" {
-				target = folder
-			}
-			for i, f := range m.folders {
-				if f == target {
-					m.folderSel = i
-					break
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "esc":
+			m.state = browsing
+			return m, nil
+		case "tab", "down":
+			m.pal.move(1)
+			return m, nil
+		case "shift+tab", "up":
+			m.pal.move(-1)
+			return m, nil
+		case "enter":
+			u := strings.TrimSpace(m.pal.value(0))
+			if u != "" {
+				folder := cleanFolder(m.pal.value(2))
+				m.addOrMerge(u, strings.TrimSpace(m.pal.value(1)), folder, strings.TrimSpace(m.pal.value(3)))
+				m.persist()
+				m.refresh()
+				// Jump to the new/updated bookmark in its folder so it's visible.
+				target := folderAll
+				if folder != "" {
+					target = folder
 				}
+				for i, f := range m.folders {
+					if f == target {
+						m.folderSel = i
+						break
+					}
+				}
+				m.applyFolder()
+				m.selectURL(u)
 			}
-			m.applyFolder()
-			m.selectURL(u)
+			m.state = browsing
+			return m, nil
 		}
-		m.state = browsing
-		m.form = nil
-		return m, nil
-	case huh.StateAborted:
-		m.state = browsing
-		m.form = nil
-		return m, nil
 	}
+	cmd := m.pal.update(msg)
 	return m, cmd
 }
 
@@ -805,24 +902,29 @@ func (m model) updateConfirming(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
-	switch m.state {
-	case editing, adding:
-		return m.form.View()
-	case confirming:
-		label := m.target.Title
-		if label == "" {
-			label = m.target.URL
-		}
-		return confirmStyle.Render(fmt.Sprintf(
-			"Delete this bookmark?\n\n  %s\n  %s\n\n  (y) yes    (n) no",
-			label, m.target.URL))
-	}
+func (m model) browseView() string {
 	view := lipgloss.JoinHorizontal(lipgloss.Top, m.sidebarView(), m.list.View())
 	if m.err != "" {
 		view += "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("error: "+m.err)
 	}
 	return view
+}
+
+func (m model) View() string {
+	switch m.state {
+	case editing, adding:
+		return overlayCenter(m.browseView(), m.pal.view(), m.w, m.h)
+	case confirming:
+		label := m.target.Title
+		if label == "" {
+			label = m.target.URL
+		}
+		box := confirmStyle.Render(fmt.Sprintf(
+			"Delete this bookmark?\n\n  %s\n  %s\n\n  (y) yes    (n) no",
+			label, m.target.URL))
+		return overlayCenter(m.browseView(), box, m.w, m.h)
+	}
+	return m.browseView()
 }
 
 func (m model) sidebarView() string {

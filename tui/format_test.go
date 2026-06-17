@@ -123,6 +123,45 @@ func TestAddOrMerge(t *testing.T) {
 	}
 }
 
+func TestPaletteNavWraps(t *testing.T) {
+	p := newPalette("Add", []paletteField{{"A", "", ""}, {"B", "", ""}, {"C", "", ""}})
+	if p.focus != 0 {
+		t.Fatal("focus should start at 0")
+	}
+	p.move(1)
+	if p.focus != 1 {
+		t.Fatalf("after move(1) focus = %d, want 1", p.focus)
+	}
+	p.move(-1)
+	if p.focus != 0 {
+		t.Fatalf("after move(-1) focus = %d, want 0", p.focus)
+	}
+	p.move(-1) // wrap backwards (the bug we're fixing: shift+tab from the top)
+	if p.focus != 2 {
+		t.Fatalf("backward wrap focus = %d, want 2", p.focus)
+	}
+	p.move(1) // wrap forwards
+	if p.focus != 0 {
+		t.Fatalf("forward wrap focus = %d, want 0", p.focus)
+	}
+}
+
+func TestOverlayCenter(t *testing.T) {
+	bg := strings.TrimRight(strings.Repeat("..........\n", 5), "\n") // 5×10 plain
+	out := overlayCenter(bg, "XX", 10, 5)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 5 {
+		t.Fatalf("overlay changed line count: %d, want 5", len(lines))
+	}
+	if !strings.Contains(out, "XX") {
+		t.Fatal("foreground not composited onto background")
+	}
+	// fg is 2 wide over a 10-wide bg -> centered at column 4: "....XX...."
+	if lines[2] != "....XX...." {
+		t.Fatalf("center row = %q, want %q", lines[2], "....XX....")
+	}
+}
+
 func TestTwoPaneRenders(t *testing.T) {
 	books := []*Bookmark{{URL: "https://a", Title: "A", Folder: "work", Added: "2026-01-01"}}
 	m := newModel(t.TempDir()+"/b.txt", books)
