@@ -9,7 +9,8 @@ build: ## Build the bmtui binary into ./bmtui/bmtui
 	cd bmtui && go build -o bmtui .
 
 install: build ## Install bmtui onto your PATH (BINDIR, default ~/.local/bin)
-	install -Dm755 bmtui/bmtui $(BINDIR)/bmtui
+	mkdir -p $(BINDIR)
+	install -m755 bmtui/bmtui $(BINDIR)/bmtui
 	@echo "installed bmtui -> $(BINDIR)/bmtui"
 
 uninstall: ## Remove the installed bmtui binary
