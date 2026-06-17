@@ -1,0 +1,33 @@
+# GoReleaser config for bmtui. Runs with workdir: tui (where the Go module is),
+# driven by .github/workflows/release.yml on a vX.Y.Z tag.
+version: 2
+
+project_name: bmtui
+
+builds:
+  - id: bmtui
+    main: .
+    binary: bmtui
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: bmtui
+    formats: [tar.gz]
+    name_template: "bmtui_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+release:
+  name_template: "bmtui {{ .Version }}"

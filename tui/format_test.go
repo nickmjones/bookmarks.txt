@@ -29,21 +29,6 @@ func TestFields(t *testing.T) {
 	}
 }
 
-// Reserialize the real file so we can diff it against bm.py's output.
-func TestReserializeRealFile(t *testing.T) {
-	books, err := load("../bookmarks.txt")
-	if err != nil {
-		t.Skip("no real file")
-	}
-	var out string
-	for _, b := range books {
-		out += formatLine(b) + "\n"
-	}
-	if err := os.WriteFile("/tmp/go_out.txt", []byte(out), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestReloadDetectsExternalWrite(t *testing.T) {
 	tmp := t.TempDir() + "/b.txt"
 	os.WriteFile(tmp, []byte(`https://a.com "A" added:2026-01-01`+"\n"), 0o644)

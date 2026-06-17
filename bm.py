@@ -403,10 +403,23 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def reformat(path):
+    """Print the file in canonical form to stdout (a 'fmt' for bookmarks files)."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            rec = parse_line(line)
+            if rec:
+                print(format_line(rec))
+
+
 def main():
     print("bm: serving %s on http://%s:%d" % (FILE, HOST, PORT))
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in ("--reformat", "fmt"):
+        reformat(sys.argv[2] if len(sys.argv) > 2 else FILE)
+    else:
+        main()

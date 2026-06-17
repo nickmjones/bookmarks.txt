@@ -467,7 +467,37 @@ func (m model) View() string {
 	return m.list.View()
 }
 
+// reformat reads a bookmarks file and prints it in canonical form to stdout.
+// Used as a "fmt" for the format and to verify Go/Python serialization parity.
+func reformat(args []string) {
+	path := resolveFile()
+	if len(args) > 0 {
+		path = args[0]
+	}
+	books, err := load(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bmtui:", err)
+		os.Exit(1)
+	}
+	for _, b := range books {
+		fmt.Println(formatLine(b))
+	}
+}
+
+// version is set at build time via -ldflags by GoReleaser.
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--reformat", "fmt":
+			reformat(os.Args[2:])
+			return
+		case "--version", "-v":
+			fmt.Println("bmtui", version)
+			return
+		}
+	}
 	path := resolveFile()
 	books, err := load(path)
 	if err != nil {

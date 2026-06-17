@@ -70,6 +70,21 @@ Keys: `↑/↓` or `j/k` move · `/` filter · `enter` open in browser · `e` ed
 `d` delete · `q` quit. It polls the file once a second, so bookmarks saved via
 the bookmarklet appear automatically while it's open.
 
+Tagged releases (`vX.Y.Z`) publish prebuilt `bmtui` binaries via GoReleaser, so
+you don't need Go installed to use the TUI — grab one from the Releases page.
+
+### Format a file
+
+Both tools can rewrite a file in canonical form (a `fmt` for bookmarks) — handy
+for tidying hand-edited files:
+
+```sh
+python3 bm.py --reformat bookmarks.txt
+tui/bmtui --reformat bookmarks.txt
+```
+
+The two implementations are checked for byte-identical output in CI.
+
 ## Design notes
 
 - **Dumb file, smart tools.** The file is the source of truth; each tool is a

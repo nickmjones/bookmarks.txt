@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tui/go.mod
+
+      - name: go vet
+        run: cd tui && go vet ./...
+
+      - name: go test
+        run: cd tui && go test ./...
+
+      - name: build bmtui
+        run: cd tui && go build -o bmtui .
+
+      - name: format parity (Go vs Python)
+        run: |
+          python3 bm.py --reformat bookmarks.example.txt > /tmp/py.txt
+          tui/bmtui --reformat bookmarks.example.txt > /tmp/go.txt
+          diff -u /tmp/py.txt /tmp/go.txt && echo "format parity OK"
